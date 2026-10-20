@@ -1,0 +1,137 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN // generates plates, sees everything
+  RESELLER // "revendedor": manages its clients and their pages/plates
+  CLIENT // "cliente"
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  name         String
+  passwordHash String
+  role         Role          @default(CLIENT)
+  status       UserStatus    @default(ACTIVE)
+  /// Reseller (or admin) that manages this user ("Usuários" screen)
+  managerId    String?
+  manager      User?         @relation("Managed", fields: [managerId], references: [id], onDelete: SetNull)
+  managed      User[]        @relation("Managed")
+  pages        Page[]
+  pageAccess   PageAccess[]
+  plates       Plate[]
+  plateAccess  PlateAccess[]
+  plateBatches PlateBatch[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([managerId])
+}
+
+/// One "Gerar plaquinhas" run: the log of what was generated, by whom, and the URL printed in its QR codes
+model PlateBatch {
+  id          String   @id @default(uuid())
+  count       Int
+  /// Site the QR codes point to; each plate's QR/NFC link is `${baseUrl}/p/${code}`
+  baseUrl     String
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  plates      Plate[]
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Links page built in the painel and rendered by the public links frontend
+model Page {
+  id        String       @id @default(uuid())
+  slug      String       @unique
+  title     String
+  /// Rest of the LinkPage config: subtitle, subtitleStyle, logo, background, colors, buttons, blocks
+  content   Json
+  ownerId   String
+  owner     User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  access    PageAccess[]
+  plates    Plate[]
+  hits      Hit[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([ownerId])
+}
+
+/// "Usuários com acesso" of a page (besides its owner)
+model PageAccess {
+  pageId String
+  page   Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([pageId, userId])
+  @@index([userId])
+}
+
+/// Physical plate (QR code + NFC). Once activated it's a "produto" in the painel.
+model Plate {
+  /// Printed on the plate and part of its URL (/p/CODE)
+  code         String        @id
+  ownerId      String?
+  owner        User?         @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  pageId       String?
+  page         Page?         @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  /// Own destination, used while the plate isn't linked to a page
+  link         String?
+  /// Sold as a Google review plate
+  google       Boolean       @default(false)
+  reviewFilter Boolean       @default(false)
+  title        String?
+  /// "Descrição interna"
+  description  String?
+  activatedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  batchId      String?
+  batch        PlateBatch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  access       PlateAccess[]
+  hits         Hit[]
+
+  @@index([ownerId])
+  @@index([pageId])
+  @@index([batchId])
+}
+
+model PlateAccess {
+  plateCode String
+  plate     Plate  @relation(fields: [plateCode], references: [code], onDelete: Cascade)
+  userId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([plateCode, userId])
+  @@index([userId])
+}
+
+/// One scan/tap of a plate (each hit of /p/CODE)
+model Hit {
+  id        BigInt   @id @default(autoincrement())
+  plateCode String
+  plate     Plate    @relation(fields: [plateCode], references: [code], onDelete: Cascade)
+  /// Page the plate pointed to at that moment (keeps page totals right after unlinking)
+  pageId    String?
+  page      Page?    @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([plateCode, createdAt])
+  @@index([pageId, createdAt])
+}
