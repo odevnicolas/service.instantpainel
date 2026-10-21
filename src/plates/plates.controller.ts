@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -319,6 +320,39 @@ export class PlatesController {
         select: productSelect,
       }),
     );
+  }
+
+  /** "Resetar": back to an empty plate (owner, destination, shared access, title and access history gone) so it can be activated again. */
+  @Post('products/:code/reset')
+  async reset(@CurrentUser() me: AuthUser, @Param('code') code: string) {
+    const { code: plateCode } = await this.find(me, code);
+    const { ownerId } = await this.prisma.plate.findUniqueOrThrow({
+      where: { code: plateCode },
+      select: { ownerId: true },
+    });
+    // Sharing is not enough: only the owner (or whoever controls them) and admins reset
+    if (!(await this.scope.controls(me, ownerId)))
+      throw new ForbiddenException(
+        'Só o dono da plaquinha ou um admin pode resetá-la.',
+      );
+    await this.prisma.$transaction([
+      this.prisma.plateAccess.deleteMany({ where: { plateCode } }),
+      this.prisma.hit.deleteMany({ where: { plateCode } }),
+      this.prisma.plate.update({
+        where: { code: plateCode },
+        data: {
+          ownerId: null,
+          pageId: null,
+          link: null,
+          google: false,
+          reviewFilter: false,
+          title: null,
+          description: null,
+          activatedAt: null,
+        },
+      }),
+    ]);
+    return { code: plateCode, status: 'empty' };
   }
 
   /** "Ver acessos": accesses per day. */
