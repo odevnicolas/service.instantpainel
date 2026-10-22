@@ -50,10 +50,19 @@ export class PublicController {
   async plate(@Param('code') raw: string) {
     const plate = await this.prisma.plate.findUnique({
       where: { code: raw.toUpperCase() },
-      select: { code: true, activatedAt: true },
+      select: {
+        code: true,
+        activatedAt: true,
+        batch: { select: { google: true } },
+      },
     });
     if (!plate) throw new NotFoundException('Código não encontrado.');
-    return { code: plate.code, status: plate.activatedAt ? 'active' : 'empty' };
+    return {
+      code: plate.code,
+      status: plate.activatedAt ? 'active' : 'empty',
+      /** Google review plate: activation only offers the review link */
+      google: plate.batch?.google ?? false,
+    };
   }
 
   /** What the public links frontend renders (LinkPage without the access list). */

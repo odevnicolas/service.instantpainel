@@ -3,8 +3,10 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   ParseUUIDPipe,
@@ -42,6 +44,7 @@ const batchBody = z.object({
   baseUrl: z
     .url({ protocol: /^https?$/, error: 'Link base inválido.' })
     .transform((v) => v.replace(/\/+$/, '')),
+  google: z.boolean().default(false),
 });
 const activateBody = z
   .object({
@@ -62,6 +65,8 @@ const updateBody = z.object({
   users: z.array(email).max(50).optional(),
 });
 const rankingQuery = listQuery.extend({ days });
+export const GOOGLE_ONLY =
+  'Esta plaquinha é de avaliações no Google: ela só pode levar para o link de avaliação.';
 
 const productSelect = {
   code: true,
@@ -115,7 +120,12 @@ export class PlatesController {
     // Batch and plates together: a failed batch leaves no log entry behind
     const batch = await this.prisma.$transaction(async (tx) => {
       const created = await tx.plateBatch.create({
-        data: { count: codes.size, baseUrl: body.baseUrl, createdById: me.id },
+        data: {
+          count: codes.size,
+          baseUrl: body.baseUrl,
+          google: body.google,
+          createdById: me.id,
+        },
       });
       const { count } = await tx.plate.createMany({
         data: [...codes].map((code) => ({ code, batchId: created.id })),
@@ -140,6 +150,7 @@ export class PlatesController {
           id: true,
           count: true,
           baseUrl: true,
+          google: true,
           createdAt: true,
           createdBy: { select: { name: true, email: true } },
           _count: {
@@ -170,6 +181,7 @@ export class PlatesController {
         id: true,
         count: true,
         baseUrl: true,
+        google: true,
         createdAt: true,
         createdBy: { select: { name: true, email: true } },
         plates: {
@@ -195,6 +207,49 @@ export class PlatesController {
     };
   }
 
+  /** "Excluir lote" (admin): the batch and its plates. Only while none is in use: a client's live plate is never deleted by accident. */
+  @Delete('plates/batches/:id')
+  @Roles('ADMIN')
+  @HttpCode(204)
+  async removeBatch(@Param('id', ParseUUIDPipe) id: string) {
+    await this.prisma.$transaction(async (tx) => {
+      if (!(await tx.plateBatch.findUnique({ where: { id } })))
+        throw new NotFoundException('Lote não encontrado.');
+      // Guarded on activatedAt (like activate): an activation racing this one either wins and blocks the delete, or finds no plate
+      await tx.plate.deleteMany({ where: { batchId: id, activatedAt: null } });
+      if (await tx.plate.count({ where: { batchId: id } }))
+        throw new ConflictException(
+          'Este lote tem plaquinhas ativadas. Resete-as antes de excluir o lote.',
+        );
+      await tx.plateBatch.delete({ where: { id } });
+    });
+  }
+
+  /** "Excluir plaquinha" (admin): one empty plate out of its batch; the batch goes too when it was the last one. */
+  @Delete('plates/:code')
+  @Roles('ADMIN')
+  @HttpCode(204)
+  async removePlate(@Param('code') raw: string) {
+    const code = raw.toUpperCase();
+    await this.prisma.$transaction(async (tx) => {
+      const plate = await tx.plate.findUnique({ where: { code } });
+      if (!plate) throw new NotFoundException('Código não encontrado.');
+      const { count } = await tx.plate.deleteMany({
+        where: { code, activatedAt: null },
+      });
+      if (!count)
+        throw new ConflictException(
+          'Esta plaquinha está ativada. Resete-a antes de excluir.',
+        );
+      if (!plate.batchId) return;
+      const batch = await tx.plateBatch.update({
+        where: { id: plate.batchId },
+        data: { count: { decrement: 1 } },
+      });
+      if (!batch.count) await tx.plateBatch.delete({ where: { id: batch.id } });
+    });
+  }
+
   /** "Ativar produto" / "Configurar plaquinha": first setup of an empty plate, to a link or one of the caller's pages. */
   @Post('plates/:code/activate')
   async activate(
@@ -203,10 +258,15 @@ export class PlatesController {
     @Body(new ZodPipe(activateBody)) body: z.output<typeof activateBody>,
   ) {
     const code = raw.toUpperCase();
-    const plate = await this.prisma.plate.findUnique({ where: { code } });
+    const plate = await this.prisma.plate.findUnique({
+      where: { code },
+      include: { batch: { select: { google: true } } },
+    });
     if (!plate) throw new NotFoundException('Código não encontrado.');
     if (plate.activatedAt)
       throw new ConflictException('Esta plaquinha já foi configurada.');
+    const googleOnly = plate.batch?.google ?? false;
+    if (googleOnly && body.page) throw new BadRequestException(GOOGLE_ONLY);
 
     let pageId: string | undefined;
     if (body.page) {
@@ -224,7 +284,7 @@ export class PlatesController {
         activatedAt: new Date(),
         link: body.link,
         pageId,
-        google: body.google,
+        google: body.google || googleOnly,
       },
     });
     if (!count)

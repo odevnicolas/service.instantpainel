@@ -47,6 +47,8 @@ model PlateBatch {
   count       Int
   /// Site the QR codes point to; each plate's QR/NFC link is `${baseUrl}/p/${code}`
   baseUrl     String
+  /// Google review plates: they can only be activated with a review link (never a page)
+  google      Boolean  @default(false)
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   plates      Plate[]

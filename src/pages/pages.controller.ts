@@ -19,6 +19,7 @@ import { Scope } from '../common/scope';
 import { plateCode } from '../common/urls';
 import { ZodPipe, listQuery, paginate } from '../common/zod';
 import { Prisma } from '../generated/prisma/client';
+import { GOOGLE_ONLY } from '../plates/plates.controller';
 import { PrismaService } from '../prisma.service';
 import { pageSchema, type PageBody } from './page.schema';
 
@@ -178,11 +179,16 @@ export class PagesController {
     const page = await this.find(me, slug);
     const code = plateCode(body.code);
     const plate =
-      code && (await this.prisma.plate.findUnique({ where: { code } }));
+      code &&
+      (await this.prisma.plate.findUnique({
+        where: { code },
+        include: { batch: { select: { google: true } } },
+      }));
     if (!code || !plate)
       throw new NotFoundException(
         'Código não encontrado. Confira o código impresso na plaquinha.',
       );
+    if (plate.batch?.google) throw new BadRequestException(GOOGLE_ONLY);
     if (plate.pageId === page.id)
       throw new ConflictException(
         'Este produto já está vinculado a esta página.',

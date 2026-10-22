@@ -382,6 +382,97 @@ describe('InstantPainel API (e2e)', () => {
       owner: { email: users.reseller.email },
       page: { slug: 'bella' },
     });
+
+    // Plates in use are never deleted: neither alone nor with their batch
+    await request(http)
+      .delete(`/plates/batches/${batches.body.items[0].id}`)
+      .set(as('admin'))
+      .expect(409);
+    await request(http)
+      .delete(`/plates/${codes[0]}`)
+      .set(as('admin'))
+      .expect(409);
+
+    const extra = (
+      await request(http)
+        .post('/plates')
+        .set(as('admin'))
+        .send({ count: 3, baseUrl: 'https://painel.teste.com' })
+        .expect(201)
+    ).body;
+    await request(http)
+      .delete(`/plates/${extra.codes[0]}`)
+      .set(as('reseller'))
+      .expect(403);
+    await request(http)
+      .delete(`/plates/${extra.codes[0].toLowerCase()}`)
+      .set(as('admin'))
+      .expect(204);
+    await request(http)
+      .delete(`/plates/${extra.codes[0]}`)
+      .set(as('admin'))
+      .expect(404);
+    expect(
+      (
+        await request(http)
+          .get(`/plates/batches/${extra.batch.id}`)
+          .set(as('admin'))
+          .expect(200)
+      ).body,
+    ).toMatchObject({ count: 2, plates: [{}, {}] });
+
+    await request(http)
+      .delete(`/plates/batches/${extra.batch.id}`)
+      .set(as('admin'))
+      .expect(204);
+    await request(http).get(`/public/plates/${extra.codes[1]}`).expect(404);
+    expect(
+      (await request(http).get('/plates/batches').set(as('admin')).expect(200))
+        .body.total,
+    ).toBe(1);
+  });
+
+  it('keeps Google batches on Google: no page, always flagged as Google', async () => {
+    const {
+      codes: [g],
+      batch,
+    } = (
+      await request(http)
+        .post('/plates')
+        .set(as('admin'))
+        .send({ count: 1, baseUrl: 'https://painel.teste.com', google: true })
+        .expect(201)
+    ).body;
+    expect(
+      (await request(http).get(`/public/plates/${g}`).expect(200)).body,
+    ).toMatchObject({ status: 'empty', google: true });
+
+    await request(http)
+      .post(`/plates/${g}/activate`)
+      .set(as('reseller'))
+      .send({ page: 'bella' })
+      .expect(400);
+    await request(http)
+      .post('/pages/bella/plates')
+      .set(as('reseller'))
+      .send({ code: g })
+      .expect(400);
+    const active = await request(http)
+      .post(`/plates/${g}/activate`)
+      .set(as('reseller'))
+      .send({ link: 'https://g.page/r/abc/review' })
+      .expect(201);
+    expect(active.body.google).toBe(true);
+
+    // Back to how it was, so the counts in the next tests don't change
+    await request(http)
+      .post(`/products/${g}/reset`)
+      .set(as('reseller'))
+      .expect(201);
+    await request(http)
+      .delete(`/plates/batches/${batch.id}`)
+      .set(as('admin'))
+      .expect(204);
   });
 
   it('lists products, daily stats and ranking within scope', async () => {
