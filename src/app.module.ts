@@ -7,6 +7,7 @@ import { AuthService } from './auth/auth.service';
 import { AuthGuard } from './common/auth';
 import { Scope } from './common/scope';
 import { env } from './env';
+import { OrdersController } from './orders/orders.controller';
 import { PagesController } from './pages/pages.controller';
 import { PlatesController } from './plates/plates.controller';
 import { PrismaService } from './prisma.service';
@@ -33,6 +34,7 @@ import { UsersController } from './users/users.controller';
     PlatesController,
     PublicController,
     UploadsController,
+    OrdersController,
   ],
   providers: [
     PrismaService,

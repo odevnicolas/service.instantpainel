@@ -19,6 +19,20 @@ enum UserStatus {
   SUSPENDED
 }
 
+/// Job in production (ERP, erp.<domain>), apart from the painel role. Admins do all three.
+enum ErpRole {
+  ORDERS // "cadastro": registers the orders
+  CUTTING // cuts the plastic
+  PRINTING // prints the art and assembles
+}
+
+/// An order goes through cutting, then printing/assembly, then waits for delivery
+enum OrderStage {
+  CUTTING
+  PRINTING
+  READY // "pronto para entrega"
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
@@ -26,6 +40,7 @@ model User {
   passwordHash String
   role         Role          @default(CLIENT)
   status       UserStatus    @default(ACTIVE)
+  erpRole      ErpRole?
   /// Reseller (or admin) that manages this user ("Usuários" screen)
   managerId    String?
   manager      User?         @relation("Managed", fields: [managerId], references: [id], onDelete: SetNull)
@@ -44,6 +59,8 @@ model User {
 /// One "Gerar plaquinhas" run: the log of what was generated, by whom, and the URL printed in its QR codes
 model PlateBatch {
   id          String   @id @default(uuid())
+  /// "Nome do lote": who the plates are for (the client)
+  name        String?
   count       Int
   /// Site the QR codes point to; each plate's QR/NFC link is `${baseUrl}/p/${code}`
   baseUrl     String
@@ -52,6 +69,8 @@ model PlateBatch {
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   plates      Plate[]
+  /// Production order sent from "Plaquinhas" (one per batch)
+  order       Order?
   createdAt   DateTime @default(now())
 
   @@index([createdAt])
@@ -136,4 +155,26 @@ model Hit {
 
   @@index([plateCode, createdAt])
   @@index([pageId, createdAt])
+}
+
+/// Production order (ERP)
+model Order {
+  /// Shown as "#12" on every screen
+  id        Int         @id @default(autoincrement())
+  /// "Cliente": the batch name when the order comes from "Plaquinhas"
+  name      String
+  /// Plates this order prints, when sent from "Plaquinhas"
+  batchId   String?     @unique
+  batch     PlateBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  /// "Tipo de placa", e.g. "Placa 8x8 cm"
+  plateType String
+  quantity  Int
+  /// Uploaded first (POST /uploads): the PNG art (one per plate from "Plaquinhas"), and the SVG cut file when there is one
+  files     String[]
+  dueDate   DateTime    @db.Date
+  stage     OrderStage  @default(CUTTING)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([stage, dueDate])
 }

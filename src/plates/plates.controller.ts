@@ -39,6 +39,8 @@ const link = z
   );
 
 const batchBody = z.object({
+  /** "Nome do lote": who the plates are for */
+  name: z.string().trim().min(1, 'Informe o nome do lote.').max(100),
   count: z.number().int().min(1).max(500),
   /** Site the printed QR codes will point to (the painel's NEXT_PUBLIC_SITE_URL) */
   baseUrl: z
@@ -121,6 +123,7 @@ export class PlatesController {
     const batch = await this.prisma.$transaction(async (tx) => {
       const created = await tx.plateBatch.create({
         data: {
+          name: body.name,
           count: codes.size,
           baseUrl: body.baseUrl,
           google: body.google,
@@ -148,11 +151,13 @@ export class PlatesController {
       this.prisma.plateBatch.findMany({
         select: {
           id: true,
+          name: true,
           count: true,
           baseUrl: true,
           google: true,
           createdAt: true,
           createdBy: { select: { name: true, email: true } },
+          order: { select: { id: true, stage: true } },
           _count: {
             select: { plates: { where: { activatedAt: { not: null } } } },
           },
@@ -179,6 +184,7 @@ export class PlatesController {
       where: { id },
       select: {
         id: true,
+        name: true,
         count: true,
         baseUrl: true,
         google: true,

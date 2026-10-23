@@ -21,6 +21,12 @@ export function setupApp(app: NestExpressApplication) {
         "default-src 'none'; style-src 'unsafe-inline'; sandbox",
       );
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // shown as <img> by the painel and the links frontend
+      // ?download=pedido-12.svg (ERP buttons): save instead of opening. Cross-origin links ignore <a download>.
+      const name = new URL(res.req.url ?? '', 'http://x').searchParams
+        .get('download')
+        ?.replace(/[^\w.-]/g, '');
+      if (name)
+        res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     },
   });
   return app;

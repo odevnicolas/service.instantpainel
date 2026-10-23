@@ -10,7 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
-import { Role } from '../generated/prisma/client';
+import { ErpRole, Role } from '../generated/prisma/client';
 import { PrismaService } from '../prisma.service';
 
 const IS_PUBLIC = 'isPublic';
@@ -28,6 +28,7 @@ export const authUserSelect = {
   role: true,
   status: true,
   managerId: true,
+  erpRole: true,
 } as const;
 export type AuthUser = {
   id: string;
@@ -35,6 +36,7 @@ export type AuthUser = {
   name: string;
   role: Role;
   managerId: string | null;
+  erpRole: ErpRole | null;
   impersonatorId?: string;
 };
 export type TokenPayload = { sub: string; imp?: string };
@@ -84,6 +86,7 @@ export class AuthGuard implements CanActivate {
       name: user.name,
       role: user.role,
       managerId: user.managerId,
+      erpRole: user.erpRole,
       impersonatorId: payload.imp,
     };
 

@@ -25,6 +25,8 @@ npm run start:dev      # http://localhost:3333
 | Página | `Page`: `slug`, `title` e o resto da configuração (`content`, JSON). |
 | Acesso | `Hit`: cada leitura do QR/NFC (`GET /r/:code`). |
 
+**Produção (ERP):** `User.erpRole` é separado do nível do painel: `ORDERS` (cadastro de pedidos), `CUTTING` (corte do plástico) ou `PRINTING` (impressão e montagem); só o admin define. Um `Order` passa por `CUTTING` → `PRINTING` → `READY` (pronto para entrega) e normalmente nasce de um lote de plaquinhas ("Enviar para produção"), um pedido por lote.
+
 **Níveis:** `ADMIN` vê tudo e gera plaquinhas. `RESELLER` (revendedor) vê o que é seu, dos clientes que gerencia e o que foi compartilhado com ele. `CLIENT` vê o que é seu e o que foi compartilhado.
 
 O formato da página espelha o painel (`app/painel/_pagina/config.ts`) e é validado em `src/pages/page.schema.ts`; mantenha os dois iguais. O subtítulo (HTML) é sanitizado no servidor: só negrito, itálico, sublinhado e cor. Arquivos (logo, fundo, PDF, imagens) precisam ser enviados antes em `POST /uploads`; URLs `blob:` são recusadas.
@@ -51,7 +53,7 @@ Listas aceitam `?search=&page=1&perPage=20` e devolvem `{ items, total }`.
 | Método | Rota | Tela | Corpo / observações |
 |---|---|---|---|
 | GET | `/users` | Usuários | `?role=CLIENT\|RESELLER` · cada item traz `pages` |
-| POST | `/users` | Criar usuário | `{ name, email, password, role? }` · revendedor só cria `CLIENT` |
+| POST | `/users` | Criar usuário | `{ name, email, password, role?, erpRole? }` · revendedor só cria `CLIENT`; `erpRole` só o admin |
 | POST | `/users/link` | Relacionar usuário existente | `{ email }` |
 | PATCH | `/users/:id` | Editar | `{ name?, password?, role? (só admin) }` |
 | POST | `/users/:id/suspend` · `/activate` | Suspender | |
@@ -61,7 +63,8 @@ Listas aceitam `?search=&page=1&perPage=20` e devolvem `{ items, total }`.
 ### Plaquinhas e produtos
 | Método | Rota | Tela | Corpo / observações |
 |---|---|---|---|
-| POST | `/plates` | Plaquinhas (admin) | `{ count }` (1–500) → `{ codes }` |
+| POST | `/plates` | Plaquinhas (admin) | `{ name, count, baseUrl, google? }` (1–500) → `{ batch, codes }` |
+| GET | `/plates/batches` | Histórico de geração | cada lote traz `name` e `order: { id, stage } \| null` |
 | GET | `/public/plates/:code` | Ativar / Configurar | público · `{ status: "empty" \| "active" }` |
 | POST | `/plates/:code/activate` | Ativar / Configurar | `{ link }` ou `{ page: slug }`, e `google?` |
 | GET | `/products` | Meus produtos | cada item: `page`, `owner`, `views`, `description`… |
@@ -83,13 +86,23 @@ Listas aceitam `?search=&page=1&perPage=20` e devolvem `{ items, total }`.
 | POST | `/pages/:slug/plates` | Vincular | `{ code }`: código ou link da plaquinha; plaquinha vazia é ativada para você |
 | POST | `/pages/:slug/plates/unlink` | Desvincular selecionados / todos | `{ codes: [] }` |
 
+### Produção (ERP)
+Admin faz tudo. Os demais precisam de `erpRole` (senão 403).
+
+| Método | Rota | Quem | Corpo / observações |
+|---|---|---|---|
+| GET | `/orders` | todos | `?ready=true` (só admin/cadastro) · admin e cadastro veem todos os abertos (ou os prontos); corte e impressão só a fila da sua etapa, por prazo. O corte recebe só os SVGs e não recebe `name` |
+| POST | `/orders` | admin, cadastro | `{ name, batchId?, plateType, quantity, dueDate: "AAAA-MM-DD", files }` · arquivos de `/uploads`, PNG obrigatório · 409 se o lote já foi enviado |
+| POST | `/orders/:id/done` | corte, impressão, admin | conclui a etapa atual: corte → impressão → pronto |
+| DELETE | `/orders/:id` | admin, cadastro | o lote volta a poder ser enviado |
+
 ### Público e arquivos
 | Método | Rota | Uso |
 |---|---|---|
 | GET | `/r/:code` | Leitura do QR/NFC: conta o acesso e redireciona (página → `LINKS_URL/slug`, link próprio, ou `APP_URL/configurar/:code` se vazia) |
 | GET | `/public/pages/:slug` | O que o frontend público renderiza (sem a lista de usuários) |
 | POST | `/uploads` | `multipart/form-data`, campo `file` (até 10 MB; PNG, JPG, WEBP, GIF, SVG ou PDF, conferido pelo conteúdo) → `{ url }` |
-| GET | `/uploads/:arquivo` | Arquivo enviado (SVG servido em sandbox) |
+| GET | `/uploads/:arquivo` | Arquivo enviado (SVG servido em sandbox) · `?download=nome.png` força o download |
 
 ## Pendências conhecidas
 

@@ -1,4 +1,5 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
@@ -74,7 +75,7 @@ describe('InstantPainel API (e2e)', () => {
     http = app.getHttpServer();
     prisma = app.get(PrismaService);
     await prisma.$executeRawUnsafe(
-      'TRUNCATE "Hit", "PlateAccess", "PageAccess", "Plate", "Page", "User" CASCADE',
+      'TRUNCATE "Order", "Hit", "PlateAccess", "PageAccess", "Plate", "Page", "User" CASCADE',
     );
     await prisma.user.create({
       data: {
@@ -163,18 +164,22 @@ describe('InstantPainel API (e2e)', () => {
     await request(http)
       .post('/plates')
       .set(as('reseller'))
-      .send({ count: 3, baseUrl: 'https://painel.teste.com' })
+      .send({ name: 'Pizzaria', count: 3, baseUrl: 'https://painel.teste.com' })
       .expect(403);
     await request(http)
       .post('/plates')
       .set(as('admin'))
-      .send({ count: 3, baseUrl: 'javascript:alert(1)' })
+      .send({ name: 'Pizzaria', count: 3, baseUrl: 'javascript:alert(1)' })
       .expect(400);
     codes = (
       await request(http)
         .post('/plates')
         .set(as('admin'))
-        .send({ count: 3, baseUrl: 'https://painel.teste.com/' })
+        .send({
+          name: 'Pizzaria',
+          count: 3,
+          baseUrl: 'https://painel.teste.com/',
+        })
         .expect(201)
     ).body.codes;
     expect(codes).toHaveLength(3);
@@ -363,6 +368,7 @@ describe('InstantPainel API (e2e)', () => {
     expect(batches.body.total).toBe(1);
     // p1 activated with a link, p2 via "Vincular", p3 by the admin
     expect(batches.body.items[0]).toMatchObject({
+      name: 'Pizzaria',
       count: 3,
       activated: 3,
       baseUrl: 'https://painel.teste.com',
@@ -397,7 +403,11 @@ describe('InstantPainel API (e2e)', () => {
       await request(http)
         .post('/plates')
         .set(as('admin'))
-        .send({ count: 3, baseUrl: 'https://painel.teste.com' })
+        .send({
+          name: 'Pizzaria',
+          count: 3,
+          baseUrl: 'https://painel.teste.com',
+        })
         .expect(201)
     ).body;
     await request(http)
@@ -440,7 +450,12 @@ describe('InstantPainel API (e2e)', () => {
       await request(http)
         .post('/plates')
         .set(as('admin'))
-        .send({ count: 1, baseUrl: 'https://painel.teste.com', google: true })
+        .send({
+          name: 'Pizzaria',
+          count: 1,
+          baseUrl: 'https://painel.teste.com',
+          google: true,
+        })
         .expect(201)
     ).body;
     expect(
@@ -618,5 +633,123 @@ describe('InstantPainel API (e2e)', () => {
       .delete(`/users/${users.reseller.id}`)
       .set(as('reseller'))
       .expect(404); // can't delete itself
+  });
+
+  it('runs an order through cutting and printing (ERP)', async () => {
+    // ERP workers get their token straight from the JWT service: login is rate limited (see top)
+    const jwt = app.get(JwtService);
+    const worker = async (erpRole: 'ORDERS' | 'CUTTING' | 'PRINTING') => {
+      const u = await prisma.user.create({
+        data: {
+          email: `${erpRole}@erp.com`,
+          name: erpRole,
+          erpRole,
+          passwordHash: '-',
+        },
+      });
+      return { Authorization: `Bearer ${await jwt.signAsync({ sub: u.id })}` };
+    };
+    const orders = await worker('ORDERS');
+    const cutter = await worker('CUTTING');
+    const printer = await worker('PRINTING');
+    await request(http).get('/orders').set(as('reseller')).expect(403);
+
+    const up = async (buf: Buffer, name: string) =>
+      (
+        await request(http)
+          .post('/uploads')
+          .set(orders)
+          .attach('file', buf, name)
+          .expect(201)
+      ).body.url as string;
+    const png = await up(PNG, 'arte.png');
+    const svg = await up(
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      'corte.svg',
+    );
+    // Sent from "Plaquinhas": tied to the batch, named after the client
+    const { batch } = (
+      await request(http)
+        .post('/plates')
+        .set(as('admin'))
+        .send({
+          name: 'Padaria Sol',
+          count: 2,
+          baseUrl: 'https://painel.teste.com',
+        })
+        .expect(201)
+    ).body;
+    const body = {
+      name: 'Padaria Sol',
+      batchId: batch.id,
+      plateType: 'Placa 8x8 cm',
+      quantity: 50,
+      dueDate: '2026-11-04',
+      files: [png, svg],
+    };
+    await request(http).post('/orders').set(cutter).send(body).expect(403);
+    await request(http)
+      .post('/orders')
+      .set(orders)
+      .send({ ...body, files: [svg] })
+      .expect(400); // PNG required
+    await request(http)
+      .post('/orders')
+      .set(orders)
+      .send({ ...body, files: ['https://x.com/a.png'] })
+      .expect(400);
+    const { id } = (
+      await request(http).post('/orders').set(orders).send(body).expect(201)
+    ).body;
+    await request(http).post('/orders').set(orders).send(body).expect(409); // one order per batch
+    const batchStage = async () =>
+      (
+        (
+          await request(http)
+            .get('/plates/batches')
+            .set(as('admin'))
+            .expect(200)
+        ).body.items as { id: string; order: object | null }[]
+      ).find((b) => b.id === batch.id)?.order;
+    expect(await batchStage()).toEqual({ id, stage: 'CUTTING' });
+
+    // Each job sees only its own queue; the cutter gets just the SVG
+    const queue = async (who: Record<string, string>, q = '') =>
+      (await request(http).get(`/orders${q}`).set(who).expect(200)).body
+        .items as object[];
+    const [cut] = await queue(cutter);
+    expect(cut).toMatchObject({
+      id,
+      quantity: 50,
+      files: [svg],
+      dueDate: '2026-11-04T00:00:00.000Z',
+    });
+    expect(cut).not.toHaveProperty('name');
+    expect(await queue(printer)).toEqual([]);
+    await request(http).post(`/orders/${id}/done`).set(printer).expect(403);
+    await request(http).post(`/orders/${id}/done`).set(orders).expect(403);
+    await request(http).post(`/orders/${id}/done`).set(cutter).expect(201);
+    await request(http).post(`/orders/${id}/done`).set(cutter).expect(403); // not its stage anymore
+    expect(await queue(printer)).toMatchObject([
+      { id, name: 'Padaria Sol', files: [png, svg] },
+    ]);
+    await request(http).post(`/orders/${id}/done`).set(printer).expect(201);
+    expect(await queue(orders)).toEqual([]);
+    expect(await queue(orders, '?ready=true')).toMatchObject([
+      { id, stage: 'READY' },
+    ]);
+    await request(http).post(`/orders/${id}/done`).set(as('admin')).expect(403); // nothing after "pronto"
+
+    const dl = await request(http)
+      .get(`/uploads/${png.split('/').pop()}?download=pedido-${id}.png"x`)
+      .expect(200);
+    expect(dl.headers['content-disposition']).toBe(
+      `attachment; filename="pedido-${id}.pngx"`,
+    );
+
+    await request(http).delete(`/orders/${id}`).set(printer).expect(403);
+    expect(await batchStage()).toEqual({ id, stage: 'READY' });
+    await request(http).delete(`/orders/${id}`).set(orders).expect(204);
+    expect(await batchStage()).toBeNull();
   });
 });

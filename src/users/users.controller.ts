@@ -23,17 +23,21 @@ import { PrismaService } from '../prisma.service';
 
 const name = z.string().trim().min(1).max(100);
 const role = z.enum(['CLIENT', 'RESELLER']); // admins are created by the seed only
+/** Job in production (ERP); null = none. Only admins set it. */
+const erpRole = z.enum(['ORDERS', 'CUTTING', 'PRINTING']).nullable();
 const listBody = listQuery.extend({ role: role.optional() });
 const createBody = z.object({
   name,
   email,
   password,
   role: role.default('CLIENT'),
+  erpRole: erpRole.default(null),
 });
 const linkBody = z.object({ email });
 const updateBody = z.object({
   name: name.optional(),
   role: role.optional(),
+  erpRole: erpRole.optional(),
   password: password.optional(),
 });
 
@@ -42,6 +46,7 @@ const userSelect = {
   email: true,
   name: true,
   role: true,
+  erpRole: true,
   status: true,
   _count: { select: { pages: true } },
 } as const;
@@ -94,7 +99,7 @@ export class UsersController {
     @CurrentUser() me: AuthUser,
     @Body(new ZodPipe(createBody)) body: z.output<typeof createBody>,
   ) {
-    if (me.role !== 'ADMIN' && body.role !== 'CLIENT')
+    if (me.role !== 'ADMIN' && (body.role !== 'CLIENT' || body.erpRole))
       throw new ForbiddenException('Revendedores só podem criar clientes.');
     try {
       const user = await this.prisma.user.create({
@@ -102,6 +107,7 @@ export class UsersController {
           name: body.name,
           email: body.email,
           role: body.role,
+          erpRole: body.erpRole,
           passwordHash: await hashPassword(body.password),
           managerId: me.id,
         },
@@ -158,11 +164,15 @@ export class UsersController {
     @Body(new ZodPipe(updateBody)) body: z.output<typeof updateBody>,
   ) {
     await this.managed(me, id);
-    if (body.role && me.role !== 'ADMIN')
+    if ((body.role || body.erpRole !== undefined) && me.role !== 'ADMIN')
       throw new ForbiddenException(
         'Só administradores mudam o nível de um usuário.',
       );
-    const data: Prisma.UserUpdateInput = { name: body.name, role: body.role };
+    const data: Prisma.UserUpdateInput = {
+      name: body.name,
+      role: body.role,
+      erpRole: body.erpRole,
+    };
     if (body.password) data.passwordHash = await hashPassword(body.password);
     return view(
       await this.prisma.user.update({
