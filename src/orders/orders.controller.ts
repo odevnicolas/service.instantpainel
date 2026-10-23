@@ -10,7 +10,6 @@ import {
   Param,
   ParseIntPipe,
   Post,
-  Query,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentUser, type AuthUser } from '../common/auth';
@@ -46,14 +45,23 @@ const createBody = z.object({
     .max(501) // one PNG per plate of a batch (up to 500) + the SVG
     .refine((f) => f.some((v) => v.endsWith('.png')), 'Envie o PNG da arte.'),
 });
-const listBody = z.object({ ready: z.stringbool().default(false) });
+/** Stage log, oldest first (admin and "cadastro" only) */
+const events = {
+  orderBy: { at: 'asc' },
+  select: { stage: true, at: true, user: { select: { name: true } } },
+} as const;
 
-/** The stage each production job works on. Finishing it moves the order to the next. */
-const QUEUE = { CUTTING: 'CUTTING', PRINTING: 'PRINTING' } as const;
+/** The stage each job finishes ("cadastro" hands ready orders to the client). Finishing it moves the order to the next. */
+const QUEUE = {
+  CUTTING: 'CUTTING',
+  PRINTING: 'PRINTING',
+  ORDERS: 'READY',
+} as const;
 const NEXT: Record<OrderStage, OrderStage | undefined> = {
   CUTTING: 'PRINTING',
   PRINTING: 'READY',
-  READY: undefined,
+  READY: 'DELIVERED',
+  DELIVERED: undefined,
 };
 
 /**
@@ -64,25 +72,30 @@ const NEXT: Record<OrderStage, OrderStage | undefined> = {
 export class OrdersController {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Admin and "cadastro": the board (every order not delivered + the 50 latest delivered, with their stage log). The others: their queue. */
   @Get()
-  async list(
-    @CurrentUser() me: AuthUser,
-    @Query(new ZodPipe(listBody)) q: z.output<typeof listBody>,
-  ) {
+  async list(@CurrentUser() me: AuthUser) {
     const job = this.job(me);
-    const stage =
-      job === 'ADMIN' || job === 'ORDERS'
-        ? q.ready
-          ? 'READY'
-          : { not: 'READY' as const }
-        : QUEUE[job];
-    // ponytail: last 200, no pagination; add it when ready orders pile up
+    if (job === 'ADMIN' || job === 'ORDERS') {
+      // ponytail: only the 50 latest delivered orders; add a search/archive when older ones are needed
+      const [open, delivered] = await Promise.all([
+        this.prisma.order.findMany({
+          where: { stage: { not: 'DELIVERED' } },
+          include: { events },
+          orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+        }),
+        this.prisma.order.findMany({
+          where: { stage: 'DELIVERED' },
+          include: { events },
+          orderBy: { updatedAt: 'desc' },
+          take: 50,
+        }),
+      ]);
+      return { items: [...open, ...delivered] };
+    }
     const items = await this.prisma.order.findMany({
-      where: { stage },
-      orderBy: q.ready
-        ? { updatedAt: 'desc' }
-        : [{ dueDate: 'asc' }, { id: 'asc' }],
-      take: 200,
+      where: { stage: QUEUE[job] },
+      orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
     });
     // The cutter only gets the format, the quantity and the SVG cut files
     return {
@@ -103,8 +116,21 @@ export class OrdersController {
   ) {
     this.registers(me);
     try {
-      return await this.prisma.order.create({
-        data: { ...body, dueDate: new Date(body.dueDate) },
+      return await this.prisma.$transaction(async (tx) => {
+        const order = await tx.order.create({
+          data: {
+            ...body,
+            dueDate: new Date(body.dueDate),
+            events: { create: { stage: 'CUTTING', userId: me.id } },
+          },
+        });
+        // The client typed when sending names the batch too ("Histórico de geração")
+        if (body.batchId)
+          await tx.plateBatch.update({
+            where: { id: body.batchId },
+            data: { name: body.name },
+          });
+        return order;
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError) {
@@ -130,7 +156,7 @@ export class OrdersController {
     if (!count) throw new NotFoundException('Pedido não encontrado.');
   }
 
-  /** "Finalizar etapa": the cutter finishes cutting, the printer marks it ready for delivery. Admins finish any stage. */
+  /** "Finalizar etapa": the cutter finishes cutting, the printer marks it ready, "cadastro" marks it delivered. Admins finish any stage. */
   @Post(':id/done')
   async done(
     @CurrentUser() me: AuthUser,
@@ -140,13 +166,23 @@ export class OrdersController {
     const order = await this.prisma.order.findUnique({ where: { id } });
     if (!order) throw new NotFoundException('Pedido não encontrado.');
     const next = NEXT[order.stage];
-    if (
-      job === 'ORDERS' ||
-      !next ||
-      (job !== 'ADMIN' && order.stage !== QUEUE[job])
-    )
+    if (!next || (job !== 'ADMIN' && order.stage !== QUEUE[job]))
       throw new ForbiddenException('Este pedido não está na sua etapa.');
-    return this.prisma.order.update({ where: { id }, data: { stage: next } });
+    // Guarded on the stage it was in: two clicks (or two people) can't skip a stage or log it twice
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id, stage: order.stage },
+        data: { stage: next },
+      });
+      if (!count)
+        throw new ConflictException(
+          'Este pedido já mudou de etapa. Atualize a tela.',
+        );
+      await tx.orderEvent.create({
+        data: { orderId: id, stage: next, userId: me.id },
+      });
+    });
+    return { ...order, stage: next };
   }
 
   private job(me: AuthUser) {

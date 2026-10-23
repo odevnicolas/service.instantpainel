@@ -25,7 +25,7 @@ npm run start:dev      # http://localhost:3333
 | Página | `Page`: `slug`, `title` e o resto da configuração (`content`, JSON). |
 | Acesso | `Hit`: cada leitura do QR/NFC (`GET /r/:code`). |
 
-**Produção (ERP):** `User.erpRole` é separado do nível do painel: `ORDERS` (cadastro de pedidos), `CUTTING` (corte do plástico) ou `PRINTING` (impressão e montagem); só o admin define. Um `Order` passa por `CUTTING` → `PRINTING` → `READY` (pronto para entrega) e normalmente nasce de um lote de plaquinhas ("Enviar para produção"), um pedido por lote.
+**Produção (ERP):** `User.erpRole` é separado do nível do painel: `ORDERS` (cadastro de pedidos), `CUTTING` (corte do plástico) ou `PRINTING` (impressão e montagem); só o admin define. Um `Order` passa por `CUTTING` → `PRINTING` → `READY` (pronto para entrega) → `DELIVERED` (entregue) e normalmente nasce de um lote de plaquinhas ("Enviar para produção"), um pedido por lote. Cada mudança de etapa grava um `OrderEvent` (etapa, quem, quando): o tempo de cada etapa vai de um evento ao seguinte.
 
 **Níveis:** `ADMIN` vê tudo e gera plaquinhas. `RESELLER` (revendedor) vê o que é seu, dos clientes que gerencia e o que foi compartilhado com ele. `CLIENT` vê o que é seu e o que foi compartilhado.
 
@@ -63,8 +63,8 @@ Listas aceitam `?search=&page=1&perPage=20` e devolvem `{ items, total }`.
 ### Plaquinhas e produtos
 | Método | Rota | Tela | Corpo / observações |
 |---|---|---|---|
-| POST | `/plates` | Plaquinhas (admin) | `{ name, count, baseUrl, google? }` (1–500) → `{ batch, codes }` |
-| GET | `/plates/batches` | Histórico de geração | cada lote traz `name` e `order: { id, stage } \| null` |
+| POST | `/plates` | Plaquinhas (admin) | `{ name, count, baseUrl, google?, art?, layout? }` (1–500) → `{ batch, codes }` · `art` (de `/uploads`) e `layout` (formato, posição, tamanho e cor do QR, PIX) ficam salvos para redesenhar as plaquinhas depois |
+| GET | `/plates/batches` | Histórico de geração | cada lote traz `name`, `art`, `layout` e `order: { id, stage } \| null` |
 | GET | `/public/plates/:code` | Ativar / Configurar | público · `{ status: "empty" \| "active" }` |
 | POST | `/plates/:code/activate` | Ativar / Configurar | `{ link }` ou `{ page: slug }`, e `google?` |
 | GET | `/products` | Meus produtos | cada item: `page`, `owner`, `views`, `description`… |
@@ -91,9 +91,9 @@ Admin faz tudo. Os demais precisam de `erpRole` (senão 403).
 
 | Método | Rota | Quem | Corpo / observações |
 |---|---|---|---|
-| GET | `/orders` | todos | `?ready=true` (só admin/cadastro) · admin e cadastro veem todos os abertos (ou os prontos); corte e impressão só a fila da sua etapa, por prazo. O corte recebe só os SVGs e não recebe `name` |
-| POST | `/orders` | admin, cadastro | `{ name, batchId?, plateType, quantity, dueDate: "AAAA-MM-DD", files }` · arquivos de `/uploads`, PNG obrigatório · 409 se o lote já foi enviado |
-| POST | `/orders/:id/done` | corte, impressão, admin | conclui a etapa atual: corte → impressão → pronto |
+| GET | `/orders` | todos | admin e cadastro: o quadro (todos os não entregues + os 50 últimos entregues), cada um com `events: [{ stage, at, user }]`; corte e impressão só a fila da sua etapa, por prazo. O corte recebe só os SVGs e não recebe `name` |
+| POST | `/orders` | admin, cadastro | `{ name, batchId?, plateType, quantity, dueDate: "AAAA-MM-DD", files }` · arquivos de `/uploads`, PNG obrigatório · com `batchId`, o `name` vira o nome do lote · 409 se o lote já foi enviado |
+| POST | `/orders/:id/done` | corte, impressão, cadastro, admin | conclui a etapa atual: corte → impressão → pronto → entregue (a entrega é do cadastro) · 409 se outra pessoa já mudou a etapa |
 | DELETE | `/orders/:id` | admin, cadastro | o lote volta a poder ser enviado |
 
 ### Público e arquivos

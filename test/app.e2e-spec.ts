@@ -668,17 +668,37 @@ describe('InstantPainel API (e2e)', () => {
       'corte.svg',
     );
     // Sent from "Plaquinhas": tied to the batch, named after the client
+    const layout = {
+      format: 'placa',
+      color: '#000000',
+      x: 50,
+      y: 80,
+      size: 25,
+    };
     const { batch } = (
       await request(http)
         .post('/plates')
         .set(as('admin'))
         .send({
-          name: 'Padaria Sol',
+          name: 'Lote da padaria',
           count: 2,
           baseUrl: 'https://painel.teste.com',
+          art: png,
+          layout,
         })
         .expect(201)
     ).body;
+    expect(batch).toMatchObject({ art: png, layout }); // saved to redraw the plates later
+    await request(http)
+      .post('/plates')
+      .set(as('admin'))
+      .send({
+        name: 'X',
+        count: 1,
+        baseUrl: 'https://painel.teste.com',
+        layout: { ...layout, x: 150 },
+      })
+      .expect(400);
     const body = {
       name: 'Padaria Sol',
       batchId: batch.id,
@@ -702,6 +722,11 @@ describe('InstantPainel API (e2e)', () => {
       await request(http).post('/orders').set(orders).send(body).expect(201)
     ).body;
     await request(http).post('/orders').set(orders).send(body).expect(409); // one order per batch
+    const named = (
+      (await request(http).get('/plates/batches').set(as('admin')).expect(200))
+        .body.items as { id: string; name: string }[]
+    ).find((b) => b.id === batch.id);
+    expect(named?.name).toBe('Padaria Sol'); // the client typed when sending names the batch
     const batchStage = async () =>
       (
         (
@@ -727,18 +752,30 @@ describe('InstantPainel API (e2e)', () => {
     expect(cut).not.toHaveProperty('name');
     expect(await queue(printer)).toEqual([]);
     await request(http).post(`/orders/${id}/done`).set(printer).expect(403);
-    await request(http).post(`/orders/${id}/done`).set(orders).expect(403);
+    await request(http).post(`/orders/${id}/done`).set(orders).expect(403); // "cadastro" only delivers
     await request(http).post(`/orders/${id}/done`).set(cutter).expect(201);
     await request(http).post(`/orders/${id}/done`).set(cutter).expect(403); // not its stage anymore
     expect(await queue(printer)).toMatchObject([
       { id, name: 'Padaria Sol', files: [png, svg] },
     ]);
     await request(http).post(`/orders/${id}/done`).set(printer).expect(201);
-    expect(await queue(orders)).toEqual([]);
-    expect(await queue(orders, '?ready=true')).toMatchObject([
-      { id, stage: 'READY' },
+    await request(http).post(`/orders/${id}/done`).set(printer).expect(403);
+    await request(http).post(`/orders/${id}/done`).set(orders).expect(201); // handed to the client
+    // The board has every stage change: who moved it and when, oldest first
+    expect(await queue(orders)).toMatchObject([
+      {
+        id,
+        stage: 'DELIVERED',
+        events: [
+          { stage: 'CUTTING', user: { name: 'ORDERS' } },
+          { stage: 'PRINTING', user: { name: 'CUTTING' } },
+          { stage: 'READY', user: { name: 'PRINTING' } },
+          { stage: 'DELIVERED', user: { name: 'ORDERS' } },
+        ],
+      },
     ]);
-    await request(http).post(`/orders/${id}/done`).set(as('admin')).expect(403); // nothing after "pronto"
+    expect(await queue(printer)).not.toHaveProperty('0.events');
+    await request(http).post(`/orders/${id}/done`).set(as('admin')).expect(403); // nothing after "entregue"
 
     const dl = await request(http)
       .get(`/uploads/${png.split('/').pop()}?download=pedido-${id}.png"x`)
@@ -748,7 +785,7 @@ describe('InstantPainel API (e2e)', () => {
     );
 
     await request(http).delete(`/orders/${id}`).set(printer).expect(403);
-    expect(await batchStage()).toEqual({ id, stage: 'READY' });
+    expect(await batchStage()).toEqual({ id, stage: 'DELIVERED' });
     await request(http).delete(`/orders/${id}`).set(orders).expect(204);
     expect(await batchStage()).toBeNull();
   });

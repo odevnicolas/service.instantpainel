@@ -20,6 +20,7 @@ import { Scope } from '../common/scope';
 import { newPlateCode, normalizeUrl } from '../common/urls';
 import { ZodPipe, email, listQuery, paginate } from '../common/zod';
 import { Prisma } from '../generated/prisma/client';
+import { file } from '../pages/page.schema';
 import { PrismaService } from '../prisma.service';
 import { StatsService } from '../stats/stats.service';
 
@@ -38,6 +39,18 @@ const link = z
       z.NEVER),
   );
 
+const pct = z.number().min(0).max(100);
+/** Mirror of the painel's Layout (plaquinhas/page.tsx): percent positions on the art, so the plates can be redrawn */
+const layout = z.object({
+  format: z.enum(['placa', 'balcao']),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  x: pct,
+  y: pct,
+  size: pct,
+  pix: z
+    .object({ code: z.string().max(512), x: pct, y: pct, size: pct })
+    .optional(),
+});
 const batchBody = z.object({
   /** "Nome do lote": who the plates are for */
   name: z.string().trim().min(1, 'Informe o nome do lote.').max(100),
@@ -47,6 +60,8 @@ const batchBody = z.object({
     .url({ protocol: /^https?$/, error: 'Link base inválido.' })
     .transform((v) => v.replace(/\/+$/, '')),
   google: z.boolean().default(false),
+  art: file.nullish(),
+  layout: layout.optional(),
 });
 const activateBody = z
   .object({
@@ -127,6 +142,8 @@ export class PlatesController {
           count: codes.size,
           baseUrl: body.baseUrl,
           google: body.google,
+          art: body.art,
+          layout: body.layout,
           createdById: me.id,
         },
       });
@@ -155,6 +172,8 @@ export class PlatesController {
           count: true,
           baseUrl: true,
           google: true,
+          art: true,
+          layout: true,
           createdAt: true,
           createdBy: { select: { name: true, email: true } },
           order: { select: { id: true, stage: true } },
@@ -188,6 +207,8 @@ export class PlatesController {
         count: true,
         baseUrl: true,
         google: true,
+        art: true,
+        layout: true,
         createdAt: true,
         createdBy: { select: { name: true, email: true } },
         plates: {

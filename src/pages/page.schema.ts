@@ -13,7 +13,7 @@ const url = z
   .refine(isHttpUrl, 'Endereço inválido: use um link http(s) completo.');
 const optionalUrl = z.union([z.literal(''), url]);
 /** Logo, background, PDF and images: only files uploaded here first (POST /uploads); local blob: or third-party URLs are rejected. */
-const file = z
+export const file = z
   .string()
   .trim()
   .refine(

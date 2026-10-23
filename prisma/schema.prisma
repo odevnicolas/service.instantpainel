@@ -26,11 +26,12 @@ enum ErpRole {
   PRINTING // prints the art and assembles
 }
 
-/// An order goes through cutting, then printing/assembly, then waits for delivery
+/// An order goes through cutting, then printing/assembly, waits for delivery and is delivered
 enum OrderStage {
   CUTTING
   PRINTING
   READY // "pronto para entrega"
+  DELIVERED // "entregue" to the client
 }
 
 model User {
@@ -50,6 +51,7 @@ model User {
   plates       Plate[]
   plateAccess  PlateAccess[]
   plateBatches PlateBatch[]
+  orderEvents  OrderEvent[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
@@ -66,6 +68,11 @@ model PlateBatch {
   baseUrl     String
   /// Google review plates: they can only be activated with a review link (never a page)
   google      Boolean  @default(false)
+  /// Art uploaded at generation (POST /uploads); null = plates without art (QR on white)
+  art         String?
+  /// Where the QR codes sit on the art: { format, x, y, size, color, pix? } (painel: plaquinhas/page.tsx).
+  /// Saved so the plates can be drawn again later ("Baixar PNG", "Enviar para produção"); null on older batches
+  layout      Json?
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   plates      Plate[]
@@ -160,21 +167,39 @@ model Hit {
 /// Production order (ERP)
 model Order {
   /// Shown as "#12" on every screen
-  id        Int         @id @default(autoincrement())
+  id        Int          @id @default(autoincrement())
   /// "Cliente": the batch name when the order comes from "Plaquinhas"
   name      String
   /// Plates this order prints, when sent from "Plaquinhas"
-  batchId   String?     @unique
-  batch     PlateBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batchId   String?      @unique
+  batch     PlateBatch?  @relation(fields: [batchId], references: [id], onDelete: SetNull)
   /// "Tipo de placa", e.g. "Placa 8x8 cm"
   plateType String
   quantity  Int
   /// Uploaded first (POST /uploads): the PNG art (one per plate from "Plaquinhas"), and the SVG cut file when there is one
   files     String[]
-  dueDate   DateTime    @db.Date
-  stage     OrderStage  @default(CUTTING)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  dueDate   DateTime     @db.Date
+  stage     OrderStage   @default(CUTTING)
+  /// Every stage change, oldest first: how long each stage took and who moved it
+  events    OrderEvent[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
   @@index([stage, dueDate])
+}
+
+/// An order entering a stage: CUTTING when it's registered, PRINTING when the cut is done, READY when printed and assembled,
+/// DELIVERED when handed to the client.
+/// A stage lasts from its event to the next one.
+model OrderEvent {
+  id      Int        @id @default(autoincrement())
+  orderId Int
+  order   Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stage   OrderStage
+  /// Who moved it (null if the user was deleted, or for orders from before the log)
+  userId  String?
+  user    User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  at      DateTime   @default(now())
+
+  @@index([orderId, at])
 }
