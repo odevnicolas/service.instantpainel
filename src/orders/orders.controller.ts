@@ -19,15 +19,15 @@ import { Prisma, type OrderStage } from '../generated/prisma/client';
 import { PrismaService } from '../prisma.service';
 
 const UPLOADS = `${env.PUBLIC_URL}/uploads/`;
-/** Only files sent to /uploads first, PNG (art) or SVG (cut file). */
+/** Only files sent to /uploads first: PNG or PDF (art; the counter display goes as the print shop's CMYK PDF), SVG (cut file). */
 const file = z
   .string()
   .trim()
   .refine(
     (v) =>
       v.startsWith(UPLOADS) &&
-      /^[\w-]+\.(png|svg)$/.test(v.slice(UPLOADS.length)),
-    'Envie os arquivos (PNG ou SVG) pelo painel.',
+      /^[\w-]+\.(png|pdf|svg)$/.test(v.slice(UPLOADS.length)),
+    'Envie os arquivos (PNG, PDF ou SVG) pelo painel.',
   );
 const createBody = z.object({
   name: z.string().trim().min(1, 'Informe o cliente.').max(100),
@@ -42,8 +42,11 @@ const createBody = z.object({
   dueDate: z.iso.date('Informe o prazo.'),
   files: z
     .array(file)
-    .max(501) // one PNG per plate of a batch (up to 500) + the SVG
-    .refine((f) => f.some((v) => v.endsWith('.png')), 'Envie o PNG da arte.'),
+    .max(501) // one art file per plate of a batch (up to 500) + the SVG
+    .refine(
+      (f) => f.some((v) => /\.(png|pdf)$/.test(v)),
+      'Envie a arte (PNG ou PDF).',
+    ),
 });
 /** Stage log, oldest first (admin and "cadastro" only) */
 const events = {
@@ -97,13 +100,13 @@ export class OrdersController {
       where: { stage: QUEUE[job] },
       orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
     });
-    // The cutter only gets the format, the quantity and the SVG cut files
+    // The cutter only gets the format, the quantity, the SVG cut files and the print PDFs (bleed for the die)
     return {
       items:
         job === 'CUTTING'
           ? items.map(({ name: _, ...o }) => ({
               ...o,
-              files: o.files.filter((f) => f.endsWith('.svg')),
+              files: o.files.filter((f) => /\.(svg|pdf)$/.test(f)),
             }))
           : items,
     };

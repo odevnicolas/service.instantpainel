@@ -667,6 +667,7 @@ describe('InstantPainel API (e2e)', () => {
       Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
       'corte.svg',
     );
+    const pdf = await up(Buffer.from('%PDF-1.4\n'), 'display.pdf');
     // Sent from "Plaquinhas": tied to the batch, named after the client
     const layout = {
       format: 'placa',
@@ -705,14 +706,14 @@ describe('InstantPainel API (e2e)', () => {
       plateType: 'Placa 8x8 cm',
       quantity: 50,
       dueDate: '2026-11-04',
-      files: [png, svg],
+      files: [png, pdf, svg],
     };
     await request(http).post('/orders').set(cutter).send(body).expect(403);
     await request(http)
       .post('/orders')
       .set(orders)
       .send({ ...body, files: [svg] })
-      .expect(400); // PNG required
+      .expect(400); // art (PNG or PDF) required
     await request(http)
       .post('/orders')
       .set(orders)
@@ -738,7 +739,7 @@ describe('InstantPainel API (e2e)', () => {
       ).find((b) => b.id === batch.id)?.order;
     expect(await batchStage()).toEqual({ id, stage: 'CUTTING' });
 
-    // Each job sees only its own queue; the cutter gets just the SVG
+    // Each job sees only its own queue; the cutter gets just the PDF and the SVG
     const queue = async (who: Record<string, string>, q = '') =>
       (await request(http).get(`/orders${q}`).set(who).expect(200)).body
         .items as object[];
@@ -746,7 +747,7 @@ describe('InstantPainel API (e2e)', () => {
     expect(cut).toMatchObject({
       id,
       quantity: 50,
-      files: [svg],
+      files: [pdf, svg],
       dueDate: '2026-11-04T00:00:00.000Z',
     });
     expect(cut).not.toHaveProperty('name');
@@ -756,7 +757,7 @@ describe('InstantPainel API (e2e)', () => {
     await request(http).post(`/orders/${id}/done`).set(cutter).expect(201);
     await request(http).post(`/orders/${id}/done`).set(cutter).expect(403); // not its stage anymore
     expect(await queue(printer)).toMatchObject([
-      { id, name: 'Padaria Sol', files: [png, svg] },
+      { id, name: 'Padaria Sol', files: [png, pdf, svg] },
     ]);
     await request(http).post(`/orders/${id}/done`).set(printer).expect(201);
     await request(http).post(`/orders/${id}/done`).set(printer).expect(403);

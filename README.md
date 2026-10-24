@@ -91,8 +91,8 @@ Admin faz tudo. Os demais precisam de `erpRole` (senão 403).
 
 | Método | Rota | Quem | Corpo / observações |
 |---|---|---|---|
-| GET | `/orders` | todos | admin e cadastro: o quadro (todos os não entregues + os 50 últimos entregues), cada um com `events: [{ stage, at, user }]`; corte e impressão só a fila da sua etapa, por prazo. O corte recebe só os SVGs e não recebe `name` |
-| POST | `/orders` | admin, cadastro | `{ name, batchId?, plateType, quantity, dueDate: "AAAA-MM-DD", files }` · arquivos de `/uploads`, PNG obrigatório · com `batchId`, o `name` vira o nome do lote · 409 se o lote já foi enviado |
+| GET | `/orders` | todos | admin e cadastro: o quadro (todos os não entregues + os 50 últimos entregues), cada um com `events: [{ stage, at, user }]`; corte e impressão só a fila da sua etapa, por prazo. O corte recebe só os SVGs e PDFs e não recebe `name` |
+| POST | `/orders` | admin, cadastro | `{ name, batchId?, plateType, quantity, dueDate: "AAAA-MM-DD", files }` · arquivos de `/uploads` (PNG, PDF ou SVG), arte em PNG ou PDF obrigatória · com `batchId`, o `name` vira o nome do lote · 409 se o lote já foi enviado |
 | POST | `/orders/:id/done` | corte, impressão, cadastro, admin | conclui a etapa atual: corte → impressão → pronto → entregue (a entrega é do cadastro) · 409 se outra pessoa já mudou a etapa |
 | DELETE | `/orders/:id` | admin, cadastro | o lote volta a poder ser enviado |
 
