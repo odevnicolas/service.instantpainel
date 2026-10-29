@@ -450,7 +450,43 @@ export class PlatesController {
     @Query('days', new ZodPipe(days)) n: 7 | 30 | 90,
   ) {
     const plate = await this.find(me, code);
-    return { days: await this.stats.daily(plate.code, n) };
+    const [daily, last24h] = await Promise.all([
+      this.stats.daily(plate.code, n),
+      this.prisma.hit.count({
+        where: {
+          plateCode: plate.code,
+          createdAt: { gte: new Date(Date.now() - 86_400_000) },
+        },
+      }),
+    ]);
+    return { days: daily, last24h };
+  }
+
+  /** "Ver acessos": each access in the period, newest first, with where it led to. */
+  @Get('products/:code/hits')
+  async hits(
+    @CurrentUser() me: AuthUser,
+    @Param('code') code: string,
+    @Query(new ZodPipe(rankingQuery)) q: z.output<typeof rankingQuery>,
+  ) {
+    const plate = await this.find(me, code);
+    const where = {
+      plateCode: plate.code,
+      createdAt: { gte: this.stats.period(q.days).start },
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.hit.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        ...paginate(q),
+        select: {
+          createdAt: true,
+          page: { select: { slug: true, title: true } },
+        },
+      }),
+      this.prisma.hit.count({ where }),
+    ]);
+    return { items, total };
   }
 
   /** "Ranking de acessos": every visible product, current vs previous period. */
