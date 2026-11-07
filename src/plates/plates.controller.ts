@@ -92,16 +92,30 @@ const productSelect = {
   google: true,
   link: true,
   reviewFilter: true,
-  page: { select: { slug: true, title: true } },
+  page: {
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      // Direct visits to the page's link (no plate): they count for the product too
+      _count: { select: { hits: { where: { plateCode: null } } } },
+    },
+  },
   owner: { select: { email: true, name: true } },
   _count: { select: { hits: true } },
 } as const;
-const view = ({
-  _count,
-  ...p
-}: Prisma.PlateGetPayload<{ select: typeof productSelect }>) => ({
+type ProductRow = Prisma.PlateGetPayload<{ select: typeof productSelect }>;
+const view = ({ _count, page, ...p }: ProductRow) => ({
   ...p,
-  views: _count.hits,
+  page: page && { slug: page.slug, title: page.title },
+  views: _count.hits + (page?._count.hits ?? 0),
+});
+/** A product's accesses: its plate's scans plus direct visits to the page it leads to. */
+const hitsOf = (p: ProductRow): Prisma.HitWhereInput => ({
+  OR: [
+    { plateCode: p.code },
+    ...(p.page ? [{ plateCode: null, pageId: p.page.id }] : []),
+  ],
 });
 
 @Controller()
@@ -451,10 +465,10 @@ export class PlatesController {
   ) {
     const plate = await this.find(me, code);
     const [daily, last24h] = await Promise.all([
-      this.stats.daily(plate.code, n),
+      this.stats.daily({ code: plate.code, pageId: plate.page?.id ?? null }, n),
       this.prisma.hit.count({
         where: {
-          plateCode: plate.code,
+          ...hitsOf(plate),
           createdAt: { gte: new Date(Date.now() - 86_400_000) },
         },
       }),
@@ -462,7 +476,7 @@ export class PlatesController {
     return { days: daily, last24h };
   }
 
-  /** "Ver acessos": each access in the period, newest first, with where it led to. */
+  /** "Ver acessos": each access in the period, newest first. No `plateCode` = direct visit to the page's link. */
   @Get('products/:code/hits')
   async hits(
     @CurrentUser() me: AuthUser,
@@ -471,7 +485,7 @@ export class PlatesController {
   ) {
     const plate = await this.find(me, code);
     const where = {
-      plateCode: plate.code,
+      ...hitsOf(plate),
       createdAt: { gte: this.stats.period(q.days).start },
     };
     const [items, total] = await Promise.all([
@@ -481,6 +495,7 @@ export class PlatesController {
         ...paginate(q),
         select: {
           createdAt: true,
+          plateCode: true,
           page: { select: { slug: true, title: true } },
         },
       }),

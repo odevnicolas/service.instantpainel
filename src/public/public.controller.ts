@@ -1,4 +1,13 @@
-import { Controller, Get, NotFoundException, Param, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { Public } from '../common/auth';
 import { env } from '../env';
@@ -33,7 +42,7 @@ export class PublicController {
     const target = !plate.activatedAt
       ? undefined
       : plate.page
-        ? `${env.LINKS_URL}/${plate.page.slug}`
+        ? `${env.LINKS_URL}/${plate.page.slug}?via=placa` // counted here: the links page must not count it again as a direct visit
         : plate.link;
     if (!target) return res.redirect(302, `${env.APP_URL}/configurar/${code}`);
 
@@ -63,6 +72,25 @@ export class PublicController {
       /** Google review plate: activation only offers the review link */
       google: plate.batch?.google ?? false,
     };
+  }
+
+  /** Direct visit to a page's link (not through a plate): the links frontend reports it after rendering. */
+  @Post('public/pages/:slug/hits')
+  @HttpCode(204)
+  async pageHit(@Param('slug') slug: string, @Headers('user-agent') ua = '') {
+    // Link previews (WhatsApp, Facebook, search engines) fetch the page too; they aren't people
+    if (
+      /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|telegram|headless/i.test(
+        ua,
+      )
+    )
+      return;
+    const page = await this.prisma.page.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    if (!page) throw new NotFoundException('Página não encontrada.');
+    await this.prisma.hit.create({ data: { pageId: page.id } });
   }
 
   /** What the public links frontend renders (LinkPage without the access list). */

@@ -150,11 +150,11 @@ model PlateAccess {
   @@index([userId])
 }
 
-/// One scan/tap of a plate (each hit of /p/CODE)
+/// One access: a scan/tap of a plate (each hit of /p/CODE), or, with no plate, a direct visit to a page's link (/l/slug)
 model Hit {
   id        BigInt   @id @default(autoincrement())
-  plateCode String
-  plate     Plate    @relation(fields: [plateCode], references: [code], onDelete: Cascade)
+  plateCode String?
+  plate     Plate?   @relation(fields: [plateCode], references: [code], onDelete: Cascade)
   /// Page the plate pointed to at that moment (keeps page totals right after unlinking)
   pageId    String?
   page      Page?    @relation(fields: [pageId], references: [id], onDelete: SetNull)

@@ -26,22 +26,27 @@ export class StatsService {
     };
   }
 
-  /** Accesses per day for one plate ("Ver acessos"), oldest first, zero-filled. */
-  async daily(plateCode: string, days: number) {
+  /**
+   * Accesses per day for one product ("Ver acessos"), oldest first, zero-filled: its plate's scans plus
+   * direct visits to the page it leads to. `count` is both, `link` the direct visits among them.
+   */
+  async daily(plate: { code: string; pageId: string | null }, days: number) {
     const { start } = this.period(days);
     const rows = await this.prisma.$queryRaw<
-      { day: string; count: number }[]
+      { day: string; count: number; link: number }[]
     >(Prisma.sql`
-      SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${TZ}, 'YYYY-MM-DD') AS day, count(*)::int AS count
+      SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${TZ}, 'YYYY-MM-DD') AS day,
+        count(*)::int AS count, count(*) FILTER (WHERE "plateCode" IS NULL)::int AS link
       FROM "Hit"
-      WHERE "plateCode" = ${plateCode} AND "createdAt" >= ${start}
+      WHERE ("plateCode" = ${plate.code} OR ("plateCode" IS NULL AND "pageId" = ${plate.pageId})) AND "createdAt" >= ${start}
       GROUP BY 1`);
-    const byDay = new Map(rows.map((r) => [r.day, r.count]));
+    const byDay = new Map(rows.map((r) => [r.day, r]));
     return Array.from({ length: days }, (_, i) => {
       const date = ymd(
         new Date(start.getTime() + i * DAY + 12 * 60 * 60 * 1000),
       ); // noon: safe from offset edges
-      return { date, count: byDay.get(date) ?? 0 };
+      const row = byDay.get(date);
+      return { date, count: row?.count ?? 0, link: row?.link ?? 0 };
     });
   }
 

@@ -341,8 +341,15 @@ describe('InstantPainel API (e2e)', () => {
 
     expect(
       (await request(http).get(`/r/${p1}`).expect(302)).headers.location,
-    ).toBe(`${env.LINKS_URL}/bella`);
+    ).toBe(`${env.LINKS_URL}/bella?via=placa`);
     await request(http).get(`/r/${p1}`).expect(302);
+    // Direct visit to the page's link counts too; a link preview bot doesn't
+    await request(http).post('/public/pages/bella/hits').expect(204);
+    await request(http)
+      .post('/public/pages/bella/hits')
+      .set('user-agent', 'WhatsApp/2.23.20.0')
+      .expect(204);
+    await request(http).post('/public/pages/nope/hits').expect(404);
 
     const pages = await request(http)
       .get('/pages')
@@ -354,9 +361,22 @@ describe('InstantPainel API (e2e)', () => {
         title: 'Bella Napoli',
         owner: users.reseller.email,
         products: 2,
-        views: 2,
+        views: 3,
       },
     ]);
+    const product = await request(http)
+      .get(`/products/${p1}`)
+      .set(as('reseller'))
+      .expect(200);
+    // 1 scan via its own link (earlier), 2 via the page, 1 direct visit to the page
+    expect(product.body.views).toBe(4);
+    const hits = await request(http)
+      .get(`/products/${p1}/hits`)
+      .set(as('reseller'))
+      .expect(200);
+    expect(
+      hits.body.items.map((h: { plateCode: string | null }) => h.plateCode),
+    ).toEqual([null, p1, p1, p1]);
   });
 
   it('logs each generated batch with its plates and their fate (admin only)', async () => {
@@ -497,10 +517,10 @@ describe('InstantPainel API (e2e)', () => {
       .set(as('reseller'))
       .expect(200);
     expect(products.body.total).toBe(2);
-    // p1: 1 hit via its own link + 2 via the page
+    // p1: 1 hit via its own link + 2 via the page + 1 direct visit to the page
     expect(
       products.body.items.find((p: { code: string }) => p.code === p1),
-    ).toMatchObject({ views: 3, page: { slug: 'bella' } });
+    ).toMatchObject({ views: 4, page: { slug: 'bella' } });
     // Not shared with the client
     expect(
       (await request(http).get('/products').set(as('client')).expect(200)).body
@@ -513,7 +533,8 @@ describe('InstantPainel API (e2e)', () => {
       .set(as('reseller'))
       .expect(200);
     expect(stats.body.days).toHaveLength(7);
-    expect(stats.body.days.at(-1).count).toBe(3);
+    expect(stats.body.days.at(-1)).toMatchObject({ count: 4, link: 1 });
+    expect(stats.body.last24h).toBe(4);
     await request(http)
       .get(`/products/${p1}/stats?days=5`)
       .set(as('reseller'))
