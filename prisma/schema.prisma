@@ -203,3 +203,21 @@ model OrderEvent {
 
   @@index([orderId, at])
 }
+
+enum CashKind {
+  IN // "entrada"
+  OUT // "saída"
+}
+
+/// "Caixa" (admin only): money in and out, written down by day
+model CashEntry {
+  id          Int      @id @default(autoincrement())
+  date        DateTime @db.Date
+  kind        CashKind
+  /// In cents (R$ 12,50 = 1250)
+  amount      Int
+  description String
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+}

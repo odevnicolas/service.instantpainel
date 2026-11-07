@@ -75,7 +75,7 @@ describe('InstantPainel API (e2e)', () => {
     http = app.getHttpServer();
     prisma = app.get(PrismaService);
     await prisma.$executeRawUnsafe(
-      'TRUNCATE "Order", "Hit", "PlateAccess", "PageAccess", "Plate", "Page", "User" CASCADE',
+      'TRUNCATE "CashEntry", "Order", "Hit", "PlateAccess", "PageAccess", "Plate", "Page", "User" CASCADE',
     );
     await prisma.user.create({
       data: {
@@ -810,5 +810,55 @@ describe('InstantPainel API (e2e)', () => {
     expect(await batchStage()).toEqual({ id, stage: 'DELIVERED' });
     await request(http).delete(`/orders/${id}`).set(orders).expect(204);
     expect(await batchStage()).toBeNull();
+  });
+  it('keeps the cash book of each day, admins only', async () => {
+    const entry = {
+      date: '2026-11-07',
+      kind: 'IN',
+      amount: 15050,
+      description: 'Venda balcão',
+    };
+    await request(http)
+      .get('/cash?date=2026-11-07')
+      .set(as('reseller'))
+      .expect(403);
+    await request(http).post('/cash').set(as('client')).send(entry).expect(403);
+    await request(http)
+      .post('/cash')
+      .set(as('admin'))
+      .send({ ...entry, amount: 0 })
+      .expect(400);
+    await request(http).post('/cash').set(as('admin')).send(entry).expect(201);
+    const out = await request(http)
+      .post('/cash')
+      .set(as('admin'))
+      .send({ ...entry, kind: 'OUT', amount: 3000, description: 'Tinta' })
+      .expect(201);
+    await request(http)
+      .post('/cash')
+      .set(as('admin'))
+      .send({ ...entry, date: '2026-11-08' })
+      .expect(201);
+
+    const day = async () =>
+      (
+        await request(http)
+          .get('/cash?date=2026-11-07')
+          .set(as('admin'))
+          .expect(200)
+      ).body.items as object[];
+    expect(await day()).toMatchObject([
+      { kind: 'IN', amount: 15050, description: 'Venda balcão' },
+      { kind: 'OUT', amount: 3000, description: 'Tinta' },
+    ]);
+    await request(http)
+      .delete(`/cash/${out.body.id}`)
+      .set(as('admin'))
+      .expect(204);
+    await request(http)
+      .delete(`/cash/${out.body.id}`)
+      .set(as('admin'))
+      .expect(404);
+    expect(await day()).toHaveLength(1);
   });
 });

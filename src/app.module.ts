@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
+import { CashController } from './cash/cash.controller';
 import { AuthGuard } from './common/auth';
 import { Scope } from './common/scope';
 import { env } from './env';
@@ -35,6 +36,7 @@ import { UsersController } from './users/users.controller';
     PublicController,
     UploadsController,
     OrdersController,
+    CashController,
   ],
   providers: [
     PrismaService,
