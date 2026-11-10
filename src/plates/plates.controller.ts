@@ -42,8 +42,10 @@ const link = z
 const pct = z.number().min(0).max(100);
 /** Mirror of the painel's Layout (plaquinhas/page.tsx): percent positions on the art, so the plates can be redrawn */
 const layout = z.object({
-  format: z.enum(['placa', 'balcao']),
+  format: z.enum(['placa', 'balcao', 'personalizado']),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  /** No white box behind the QR codes */
+  clear: z.boolean().optional(),
   x: pct,
   y: pct,
   size: pct,
